@@ -1,9 +1,16 @@
 # AGENTS.md — Orcastra engineering notes
 
-Orientation for AI coding agents (and humans) working on Orcastra. It is
-intentionally dense, and it is the accumulated *this-cost-us-an-afternoon* list
-for this hardware. Almost every line below was learned by getting it wrong
-first. Do **not** rediscover these.
+**Read `wilibsp/AGENTS.md` completely, through EOF, before inspecting
+or changing this project.** That file is the authoritative FREE-WILi 2 BSP and
+app contract — build wrappers, the FW2App requirements every app must meet, the
+power-zone rules and the hardware-verification procedure. It is intentionally
+long: if your reader truncates output, continue from the last line in additional
+chunks until you reach EOF. Do not act after reading only its first chunk. The
+contract is not restated here, because duplicated rules drift.
+
+Then read this file. It covers what is specific to Orcastra: the audio path, the
+PSRAM execution scheme, the UI, and the hardware constraints this app runs into.
+It is dense on purpose — treat every invariant below as load-bearing.
 
 If you are here to add an effect, read
 [`docs/ADDING-AN-EFFECT.md`](docs/ADDING-AN-EFFECT.md) for the mechanics and
@@ -13,7 +20,7 @@ this file for the constraints.
 
 A real-time audio multi-tool for the **FREE-WILi 2** ("FW2") — effects,
 sampler, drum machine, synth, theremin, chord keys, tuner and visualiser. It
-builds against the upstream `freewili2_bsp` library (the `external/wilibsp`
+builds against the upstream `freewili2_bsp` library (the `wilibsp`
 submodule) and nothing else; see invariant 22 for why that constraint is
 load-bearing rather than incidental.
 
@@ -32,7 +39,7 @@ the repo, and invariant 21 is the one to read before touching it.
 ```
 orcastra/
   CMakeLists.txt          top-level: PICO_BOARD=freewili2, pico_sdk_init,
-                          add_subdirectory(external/wilibsp/bsp) + apps.
+                          add_subdirectory(wilibsp/bsp) + apps.
                           ALSO sets PICO_DEFAULT_PSRAM_MIN_DESELECT (inv. 23)
                           and the FW2_AGENTIO option (harness, PSRAM target only)
   CMakePresets.json       "target" configure/build preset (Ninja, build/)
@@ -46,22 +53,18 @@ orcastra/
     keys.c/.h             chord keyboard (FM e-piano / saw strings)
     viz.c/.h              spectrum + scope visualiser
     voice_data.c/.h       synthesised voice, generated; see LICENSE for provenance
-    sd_entry.c            launched-from-SD entry: IRQ handover, PSRAM re-time,
-                          clocks. THE most delicate file in the repo (inv. 21)
-    psram_xip_link/       linker overrides: execute-in-place from PSRAM, with
-                          the timing-critical + audio set forced into SRAM
-    psram_link/           the copy_to_ram variant (staged in PSRAM, runs in SRAM)
+    psram_link_override/  ONE linker override: adds libgcc to the BSP's SRAM
+                          bootstrap section. Delete once upstream carries it.
   tools/
-    fw.py / fw.cmd        build / flash / RTT driver (see below)
+    fw.py / fw.cmd        build + RTT driver (no flash path — see below)
     agentio.py            screenshot + input injection over SWD
     check_psram_xip.py    structural verification of the PSRAM-execution build
-    read_boot_stage.py    read the boot breadcrumb from a hung app, no halt
-    make_voice_sidecar.py generate the voice blob
+                          (walks the re-time call graph THROUGH veneers)
     openocd/*.cfg         CMSIS-DAP + RP2350 OpenOCD configs
   docs/
     ADDING-AN-EFFECT.md   the extension guide
   prebuilt/orcastra.uf2   the built app, so it can be tried without a toolchain
-  external/wilibsp        the ONE submodule (invariant 22)
+  wilibsp        the ONE submodule (invariant 22)
 ```
 
 ## Command vocabulary
@@ -75,10 +78,15 @@ hardcode a version here.
 
 | Command | What it does |
 |---|---|
-| `fw build [app]` | Configure (first run) + build `apps/<app>` (default `orcastra`) → `build/apps/<app>/<app>.elf` |
-| `fw flash [app]` | Program + verify + reset over the on-board CMSIS-DAP debug probe via OpenOCD (no BOOTSEL dance) |
+| `fw build [target]` | Configure (first run) + build one target (default `orcastra`) → `build/apps/orcastra/<target>.elf`. The app DIRECTORY is `apps/orcastra`; the TARGET is `orcastra`. Target name ≠ directory name, so never compose a path from the target name. |
 | `fw rtt [-s N]` | Stream SEGGER RTT diagnostics (OpenOCD RTT server, port 9090); `-s N` captures N seconds then exits |
-| `fw new-app <name>` | Scaffold a new app directory; then add `add_subdirectory(apps/<name>)` to the top-level CMakeLists.txt yourself. (The template it copies is not published — for a new effect you want `docs/ADDING-AN-EFFECT.md`, not a new app.) |
+
+**This driver has no `flash` command, by design.** Both targets load at
+`0x11000000`; the only thing the probe could program is QSPI flash at
+`0x10000000`, which holds the stock DISPLAY firmware — the bootloader that
+launches apps from the card. Install an app by copying its `.uf2` to `/apps`, or
+with wilibsp's `fw install-app`, which writes the card over MAIN's serial link.
+The probe is how you read RTT and drive the agentio harness.
 
 Before flashing: `Get-Process openocd -ErrorAction SilentlyContinue | Stop-Process -Force`
 (a stale OpenOCD instance holds the probe). If flashing fails with "unable to
@@ -87,7 +95,7 @@ GDB attaches on port 3333 while OpenOCD runs.
 
 ## The one submodule
 
-`external/wilibsp` — the FREE-WILi 2 board support package
+`wilibsp` — the FREE-WILi 2 board support package
 (<https://github.com/freewili/wilibsp>), MIT. We link its `freewili2_bsp`
 static library directly and use nothing else. Worth reading in it:
 `bsp/` (the peripheral drivers), `docs/hardware/{pinmap,facts,catalog}.md`,
@@ -123,7 +131,7 @@ deliberate — see invariant 22 before moving it.
    normally `copy_to_ram` (code+data+bss all inside 512 KB of SRAM — watch the
    budget), and big buffers go in **PSRAM** (`PSRAM_BASE 0x11000000`, 8 MB
    APS6404L, `bsp/platform/psram.h`). **Orcastra's shipping target does NOT do
-   this**: `orcastra_psram` executes in place from PSRAM and only copies `.data`
+   this**: `orcastra` executes in place from PSRAM and only copies `.data`
    to SRAM, which is what buys the audio path its headroom — see invariant 21
    for the scheme and the trap in it. A UI-heavy app whose `.text` outgrows SRAM
    has the same two choices. Never set `PICO_EMBED_XIP_SETUP=1` (boot-loops).
@@ -188,11 +196,12 @@ deliberate — see invariant 22 before moving it.
     suffered. Day-1 builds flashed fine because their only free-running
     DMA wrote small fixed buffers near 0x20081974, missing the work area;
     the PDM build's big ring landed on it.
-    FIX (in `fw flash`, tools/fw.py DMA_QUIESCE): halt, CHAN_ABORT all 16
-    channels, clear every CHx_CTRL_TRIG, then program — cores stay halted
-    through program's internal reset so nothing re-arms. Verified: flash
-    over a RUNNING app, and RTT-then-immediate-reflash, both first-try. No
-    power cycles, no update ritual. If symptoms ever return, check for
+    FIX: halt, CHAN_ABORT all 16 channels, clear every CHx_CTRL_TRIG, then
+    program — cores stay halted through program's internal reset so nothing
+    re-arms. Verified: flash over a RUNNING app, and RTT-then-immediate-
+    reflash, both first-try. The sequence lives in wilibsp's `tools/fw.py`,
+    and applies to anything that programs this board while an orcastra build
+    is running — including restoring the stock DISPLAY image. If symptoms ever return, check for
     post-reset DMA activity first: `mdw 0x50000000 64` twice, look for
     advancing WRITE_ADDRs.
 
@@ -204,7 +213,7 @@ Pins: DIN=GPIO4 (ADC in), DATA=GPIO5 (DAC out), LRCK=GPIO6, BCLK=GPIO7
 apps/orcastra/fx.h; the driver examples below still say 16 kHz — same
 mechanism, pass 48000 and override codec reg 0x07 to 0x0000 for 48 kHz
 filters). Mono speaker / stereo-capable jack. Docs:
-`external/wilibsp/docs/drivers/audio.md` and `.../pdm.md`.
+`wilibsp/docs/drivers/audio.md` and `.../pdm.md`.
 
 ```c
 board_init();                                  // clocks first, always
@@ -299,14 +308,21 @@ two-press chord text engine on top, if you need text entry.
 
 ## Workflow expectations
 
-- **Reuse before writing**: look for the proven driver in `external/wilibsp`
+- **Reuse before writing**: look for the proven driver in `wilibsp`
   before writing hardware glue, and keep its naming (`st7796_*`, `ft6336_*`,
   `codec_nau88c10_*`, ...). Almost every peripheral on this board already has a
   driver there that someone has debugged on real hardware.
 - Keep new pure logic (DSP, parsers) SDK-free so it can be host-tested;
   hardware glue is verified on the device (RTT + ears/eyes).
-- Verify on hardware before claiming success: `fw build` → stop openocd →
-  `fw flash` → `fw rtt -s 8` (expect boot banner + `codec: input path ready`).
+- Verify on hardware before claiming success, on the path users actually run:
+  `fw build` → copy `build/apps/orcastra/orcastra.uf2` to `/apps` on the card
+  (or `fw install-app` from wilibsp) → launch it from the on-device picker →
+  `fw rtt -s 8` (expect boot banner + `codec: input path ready`). With
+  `-DFW2_AGENTIO=ON`, add `python tools/agentio.py screenshot -o shot.png` and
+  actually LOOK at the PNG — a capture that succeeds and shows the wrong thing
+  is the failure worth catching. If the app dies early, the BSP's PSRAM
+  bootstrap emits `psram: bootstrap copied` and `psram: constructors complete`
+  over RTT before `main()`, so the log itself localises the failure.
 - Conventional Commits (`feat:`, `fix:`, `docs:`, ...), imperative subject.
 - **This repo is PUBLIC.** Everything committed here is world-readable, so:
   no unit serial numbers, no local absolute paths, no named colleagues, and
@@ -376,13 +392,14 @@ two-press chord text engine on top, if you need text entry.
 
 17. **Any display-side SWD reset desyncs the power-coprocessor link**
     (bench-proven 2026-08-05, cost an afternoon). `program ... verify reset`
-    (which `fw flash` emits, tools/fw.py flash_command) or any `reset` on
+    (whatever emits it — wilibsp's `fw flash`, or a manual OpenOCD invocation
+    restoring the stock image) or any `reset` on
     OpenOCD interface 0 reboots DISPLAY alone; the always-on battery-rail
     power coprocessor keeps its stale link state and does NOT re-sync on its
     own. Unplugging USB does not reset it; cycling the display rail does not
     reset it. Recovery: hold RED ~3 s for a TRUE power-down, then power up.
-    Rule: after any `fw flash`, RED-power-cycle before trusting buttons,
-    zone telemetry, or SD-loader behavior.
+    Rule: after any probe-side reset or reflash, RED-power-cycle before
+    trusting buttons, zone telemetry, or SD-loader behavior.
 
 18. **Power zones: never use per-zone "Set Zone" on the MAIN console** — it
     resolves to an ABSOLUTE awake mask seeded from cached state, so with
@@ -397,7 +414,7 @@ two-press chord text engine on top, if you need text entry.
 19. **SD-card app delivery (`/apps` on the card): the loader routes a UF2 by
     the address its blocks target, never by filename.** 0x11000000 = PSRAM
     app (flash untouched — OUR path, targets `orcastra_sd` and
-    `orcastra_psram`), 0x20000000 = RAM app (192 KiB loaded-content cap — an
+    `orcastra`), 0x20000000 = RAM app (192 KiB loaded-content cap — an
     earlier 448 KB figure came from an abandoned loader branch and is wrong),
     0x10000000 = FIRMWARE UPDATE that overwrites the display firmware.
     NEVER put a raw .bin in /apps — it carries no address and goes down the
@@ -427,8 +444,8 @@ two-press chord text engine on top, if you need text entry.
     runtime, never assume it. When bringing up a new launch path, walk it in
     stages rather than debugging the whole app at once: a bare fill-the-screen app first, then
     the sidecar-blob contract, then orcastra_sd — whose boot-trace markers
-    name any stage that freezes. `tools/read_boot_stage.py` reads the
-    breadcrumb over SWD without halting the core.
+    name any stage that freezes. The BSP's PSRAM bootstrap
+    emits its progress over RTT before `main()` runs.
 
 20. **Continuous touch controls: use the shared mappers, never hand-roll the
     arithmetic** (2026-08-06). Two corrections apply to EVERY slider, strip and
@@ -484,36 +501,45 @@ two-press chord text engine on top, if you need text entry.
     (`EQ_SLX`/`EQ_SLW`) rather than editing the shared `SLIDER_*`, or the revert
     drags every effect settings page along with it.
 
-21. **Two PSRAM app schemes exist and the difference is SRAM, not speed**
-    (2026-08-07). Both stage the image at `0x11000000` — the loader routes on
-    that address (invariant 19) — but they execute differently:
-    `apps/orcastra/psram_link` + `pico_set_binary_type(copy_to_ram)` copies
-    `.text`/`.rodata`/`.data` into SRAM and runs there (~125 KB of SRAM);
-    `apps/orcastra/psram_xip_link` with **no** `pico_set_binary_type()` call
-    leaves `.text`/`.rodata` at VMA==LMA in PSRAM to execute in place and copies
-    only ~28 KB (`orcastra_psram`). The second frees ~96 KB — 22.6 KB of SRAM
-    free becomes 118.6 KB — which matters because `.bss` alone is 368 KB
-    (`gbuf` 131,072, `strip_buf` 46,080, `sbuf`/`s_raw` 32,768 each). Latency is
-    NOT a reason to avoid XIP-from-PSRAM: a production build using it was
-    demoed and latency-measured with no audible penalty. **THE TRAP:** `board_init()` raises
-    `clk_sys` to 250 MHz, which invalidates the QMI M1 timing for PSRAM until
-    `psram_reinitialize()` completes, and under the XIP scheme the CPU fetches
-    its own instructions through that mis-timed window — so everything executing
-    in the gap (`psram.c`, `flash.c`, `clocks.c`, `pll.c`, `vreg.c`, `timer.c`,
-    `xip_cache.c` and **`board.c` itself**, the orchestrator that is easiest to
-    forget) must be forced RAM-resident. Do that by naming objects in an
-    overridden `default_text_excludes.incl`: whatever is excluded from the flash
-    `.text` section is picked up by `*(.text*)` in `section_default_data.incl`'s
-    RAM `.data` section. The audio objects (`fx`/`vox`/`synth`/`drums`/`keys`,
-    21,744 bytes) are in that list for the 5.2 ms deadline, not for correctness.
-    Verify with `python tools/check_psram_xip.py` — it asserts VMA==LMA in PSRAM,
-    SRAM residency of the timing-critical and audio symbols, that `main` stays
-    in PSRAM, and that the image fits the 1 MB reservation. Cross-checked against a
-    known-good PSRAM-resident build: our image reproduces its address-literal
-    ratio (1.63) and copy-region size (28,024 vs 29,108) almost exactly, which
-    is the cheapest available confirmation that the scheme is really in force.
+21. **The app executes from PSRAM via the BSP's `fw2_psram_app()`. Do not
+    hand-roll any part of it.** The wrapper supplies the linker scripts, the
+    SRAM-resident bootstrap, the FW2App metadata record and UF2 generation. The
+    bootstrap copies `.data`, clears `.bss`, installs the vector table, then
+    calls `board_init_psram()` — vreg, `clk_sys` to 250 MHz, `clk_peri`, and the
+    QMI re-time — before entering PSRAM-resident `main()`. `main()` still calls
+    `board_init()`; the BSP records that the bootstrap already ran and performs
+    only the peripheral tail. Never reintroduce a clock or QMI re-time in this
+    app: that belongs upstream.
 
-22. **ONE submodule: `external/wilibsp`. Keep it that way** (2026-08-23). The
+    **THE HAZARD.** Between the `clk_sys` raise and `psram_reinitialize()` the
+    QMI timing for PSRAM is stale, and the CPU is fetching its own instructions
+    through that window. Everything reachable in the gap must be SRAM-resident.
+    The BSP's `.sram_bootstrap` section covers the SDK and BSP objects, but the
+    exposure is easy to miss because a long-branch VENEER is itself SRAM-
+    resident: auditing direct callees shows all-SRAM while the real target sits
+    in PSRAM. `clock_configure()` and `psram_configure_params()` both divide
+    64-bit values, which reaches libgcc that way.
+    `apps/orcastra/psram_link_override/` adds libgcc to the section for exactly
+    this reason; delete that directory once the BSP carries the entry itself.
+
+    Verify with `python tools/check_psram_xip.py` after ANY change to the linker
+    overrides or the source list. It walks the re-time call graph THROUGH
+    veneers, which is the only mechanical way to catch this class of miss.
+
+    **The DSP runs from PSRAM, deliberately.** Forcing `fx`/`vox`/`synth`/
+    `drums`/`keys` into SRAM was measured against the 5.2 ms capture deadline
+    under a heavy chain (reverb, delay, EQ, pitch correction, drums and sampler
+    together): 80% audio-core load with them in SRAM, 81% from PSRAM. About 1.5
+    points does not justify carrying linker overrides, so they stay in PSRAM and
+    `check_psram_xip.py` asserts it.
+
+    **SRAM budget.** `.bss` is 368 KB and is 32 KB-aligned because the PDM
+    capture ring needs it, so `.sram_bootstrap` plus `.data` crossing a 32 KB
+    boundary costs a whole boundary in padding. At present they total ~36 KB,
+    which puts `.bss` at `0x20010000` and leaves 86.9 KB free. Shrinking that
+    pair back under 32 KB would recover roughly 29 KB.
+
+22. **ONE submodule: `wilibsp`. Keep it that way** (2026-08-23). The
     project declares exactly one dependency, and that is the point — the app is
     buildable from the FREE-WILi 2 board support package alone. 17 other
     submodules used to be declared; the build referenced **none** of them, and
@@ -521,9 +547,9 @@ two-press chord text engine on top, if you need text entry.
     `ow_*` call sites** — power zones actually go through the BSP's
     `input/picpwr.h`. All removed. If the OneWili display-link API is ever
     genuinely needed, do NOT add a top-level submodule: wilibsp already vendors
-    it at `external/wilibsp/libs/onewili`, so point at that and the
+    it at `wilibsp/libs/onewili`, so point at that and the
     one-dependency story survives.
-    **THE PIN IS DELIBERATELY NOT UPSTREAM TIP.** It is `8cdd5cb` ("merge:
+    **THE PIN IS `8cdd5cb`** ("merge:
     resolve FW2App contract with target enforcement"), which is an ancestor of
     `freewili/wilibsp` master — so `git clone --recursive` reaches it. Verify
     that property with `git merge-base --is-ancestor <pin> origin/master` before
@@ -534,18 +560,40 @@ two-press chord text engine on top, if you need text entry.
     `i2s-integer-clkdiv-v2`, `bound-i2c-transfers`, `capture-dma-ring-clamp`,
     `speaker-output-ceiling`, `power-zone-requests`, `power-up-example-apps` —
     are upstream at or before that commit, verified with
-    `git merge-base --is-ancestor`. Do not bump to tip without testing:
-    `a5baa71` ("feat(usb): add PIO HID host driver") makes `bsp/CMakeLists.txt`
-    compile `pio_usb_host/*.cpp`, which needs `pio_usb.h` from Pico-PIO-USB —
-    **and that library is absent from the Pico VS Code extension's SDK install**
-    (`lib/` has only btstack, cyw43-driver, lwip, mbedtls, tinyusb; there is no
-    `Pico-PIO-USB` and no `tinyusb/hw/mcu/raspberry_pi`). Bumping past it fails
-    with `fatal error: pio_usb.h: No such file or directory`. Either stay at
-    `8cdd5cb` or get USB host made optional upstream.
+    `git merge-base --is-ancestor`.
+
+    **Requirements for building against a newer pin.** Two things must be in
+    place before the pin can advance past `a5baa71` ("feat(usb): add PIO HID
+    host driver"), which makes `bsp/CMakeLists.txt` compile the PIO USB host
+    sources:
+
+    1. Point the SDK at the Pico-PIO-USB copy that wilibsp vendors, BEFORE
+       `include(pico_sdk_import.cmake)` in the top-level CMakeLists.txt:
+
+           set(PICO_PIO_USB_PATH
+               "${CMAKE_CURRENT_LIST_DIR}/wilibsp/bsp/third_party/Pico-PIO-USB")
+
+    2. Initialize the Pico SDK's own TinyUSB submodule, which the VS Code
+       extension leaves unpopulated:
+
+           git -C ~/.pico-sdk/sdk/2.3.0 submodule update --init lib/tinyusb
+
+       Without it the build fails at the CMake GENERATE step — not at
+       configure, which makes it easy to misread — with
+       `Cannot find source file: .../lib/tinyusb/src/tusb.c`.
+
+    With both in place the app builds against master and passes
+    `tools/check_psram_xip.py` and wilibsp's `tools/check_app_uf2.py`. Advancing
+    the pin is a prerequisite for adopting `fw2_psram_app()` (see the roadmap in
+    README.md): the commits above `8cdd5cb` are largely PSRAM-app bootstrap
+    fixes to that helper.
+
+    **SDK 2.3.0 is a hard floor.** 2.2.0 has no
+    `pico_add_linker_script_override_path`, so it cannot configure this project.
 
 23. **PSRAM tCPH lives in the TOP-LEVEL CMakeLists, not per-app** (2026-08-23).
     `PICO_DEFAULT_PSRAM_MIN_DESELECT=22` is set with `add_compile_definitions()`
-    before `add_subdirectory(external/wilibsp/bsp bsp)`. It MUST be, because the
+    before `add_subdirectory(wilibsp/bsp bsp)`. It MUST be, because the
     consumer is `board_init()` in the BSP, which compiles **once** into the
     shared `freewili2_bsp` static library — a
     `target_compile_definitions(<app> PRIVATE ...)` silently does nothing, and
@@ -558,7 +606,7 @@ two-press chord text engine on top, if you need text entry.
     (only 10% over the APS6404L minimum, itself ambiguous 15-20 ns) and 22 ns
     gives 24.00 ns. The whole 21..24 ns window maps to the same field, so a
     small clock change cannot silently drop a cycle. It matters most for
-    `orcastra_psram`, which fetches instructions from PSRAM: there a marginal
+    `orcastra`, which fetches instructions from PSRAM: there a marginal
     read is a corrupted instruction, not a dropped pixel.
 
 24. **Three-finger reset: YELLOW + GREEN + BLUE held briefly returns the display

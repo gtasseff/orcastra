@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Structural verification for the PSRAM-execution app build (orcastra_psram).
+"""Structural verification for the PSRAM-execution app build (orcastra).
+
+The scheme itself comes from wilibsp's fw2_psram_app(); this asserts the
+properties an app can still get wrong, several of which fail silently on
+hardware rather than at link time.
 
 This build cannot be smoke-tested without a launchable unit, so the invariants
 that make it safe are asserted here instead. Run it after any change to
@@ -21,11 +25,8 @@ WHAT IT CHECKS, AND WHY EACH ONE MATTERS
    gap is fetching through a mis-timed window. This is the check that stops the
    build from hard-faulting at boot; see psram_xip_link/pico_flash_region.ld.
 
-3. Every audio-path object is in SRAM.
-   Latency, not correctness -- 5.2 ms capture deadline (AGENTS.md invariant 15).
-
-4. UI code stays in PSRAM.
-   If main.c migrates to SRAM the scheme has stopped paying for itself.
+3. UI and DSP code stay in PSRAM.
+   If they migrate to SRAM the scheme has stopped paying for itself.
 
 5. The image fits the loader's 1 MB reservation at 0x11000000, and PSRAM data
    starts above it. Overlap here corrupts the code being executed, not a stale
@@ -37,46 +38,43 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ELF = ROOT / "build" / "apps" / "orcastra" / "orcastra_psram.elf"
+ELF = ROOT / "build" / "apps" / "orcastra" / "orcastra.elf"
 
 PSRAM_IMG = (0x11000000, 0x11100000)   # 1 MB image reservation
 PSRAM_DAT = 0x11100000
 SRAM = (0x20000000, 0x20080000)
 
-# Must be in SRAM or the boot-time re-clock fetches through a mis-timed window.
+# Must be in SRAM, or the boot-time re-clock fetches through a mis-timed window.
 #
-# These are the names the PSRAM-RESIDENT path actually links, which are NOT the
-# ones you would guess from the stock boot flow. This list used to read
-# board_init / set_sys_clock_khz / psram_reinitialize / psram_configure_params /
-# flash_start_xip / xip_cache_clean_all -- and every one of them was ABSENT from
-# the ELF, so the checker skipped all six and printed "All invariants hold" while
-# verifying nothing. Why each went away:
-#   board_init            -> we call board_init_inherited() via
-#                            sd_entry_board_init_psram_resident() instead
-#   set_sys_clock_khz     -> static inline in the SDK; folded into its caller
-#   psram_* / flash_start_xip / xip_cache_clean_all
-#                         -> PICO_RUNTIME_SKIP_INIT_PSRAM plus the no-op
-#                            __wrap_psram_reinitialize() means the SDK's PSRAM
-#                            init is never linked; the loader stub did it and
-#                            sd_entry re-times the QMI by hand
-# WALK_ANCHORS below is checked for existence, so this cannot rot silently again.
+# board_init_psram() runs from the BSP's .sram_bootstrap section. It raises
+# clk_sys and only then calls psram_reinitialize(); everything reachable in
+# between is executing while the QMI timing for PSRAM is stale, and under this
+# scheme the CPU fetches its own instructions through that window.
+#
+# The reachability walk below is the part that matters. It follows long-branch
+# VENEERS, which is the only way this class of miss is visible: the veneer is
+# itself SRAM-resident, so auditing direct callees shows all-SRAM and looks
+# fine while the real target sits in PSRAM. That is exactly how the libgcc
+# 64-bit divide helpers were found reachable from clock_configure().
 TIMING_CRITICAL = [
-    "sd_entry_board_init_psram_resident", "board_init_inherited",
-    "board_init_peripherals", "clock_configure", "clock_configure_internal",
-    "set_sys_clock_pll", "vreg_set_voltage",
-    "sd_entry_psram_devinfo", "sd_entry_irq_handover",
-    "runtime_init_early_resets",
+    "fw2_psram_bootstrap", "board_init_psram",
+    "clock_configure", "clock_configure_internal", "set_sys_clock_pll",
+    "vreg_set_voltage", "psram_reinitialize", "psram_configure_params",
 ]
 # Roots of the re-timing reachability walk. At least one MUST exist in the ELF,
 # and the walk must cover a plausible number of functions -- see the assertions
 # after the walk. An empty walk is a FAILURE, not a pass.
-WALK_ANCHORS = ["sd_entry_board_init_psram_resident", "board_init_inherited",
-                "board_init", "board_init_clk"]
-# Must be in SRAM for the 5.2 ms deadline.
-AUDIO_PATH = ["fx_process", "vox_process", "synth_process", "drums_process",
-              "keys_process"]
-# Must stay in PSRAM or the scheme is not saving anything.
-MUST_STAY_PSRAM = ["main"]
+# Anchored on the calls that execute BETWEEN the clock raise and the QMI
+# re-time. Deliberately not board_init_psram(): it calls board_init_peripherals()
+# after psram_reinitialize() has completed, so peripheral bring-up runs against
+# a valid window and pulls in most of the app if walked.
+WALK_ANCHORS = ["clock_configure", "psram_configure_params",
+                "psram_reinitialize", "set_sys_clock_pll"]
+# The DSP deliberately executes from PSRAM. Forcing it into SRAM was measured
+# against the 5.2 ms capture deadline and bought about 1.5 points of audio-core
+# load under a heavy effect chain, which does not justify a linker override.
+MUST_STAY_PSRAM = ["main", "fx_process", "vox_process", "synth_process",
+                   "drums_process", "keys_process"]
 
 
 def tool(name):
@@ -104,7 +102,7 @@ def where(addr):
 
 def main():
     if not ELF.exists():
-        print(f"SKIP: {ELF} not built. Run: ninja -C build orcastra_psram")
+        print(f"SKIP: {ELF} not built. Run: ninja -C build orcastra")
         return 2
     readelf, nm = tool("readelf"), tool("nm")
     if not (readelf and nm):
@@ -140,8 +138,11 @@ def main():
         else:
             notes.append(f"exec-in-place segment 0x{vma:08X} size {fsz:,} (VMA==LMA)")
 
-    top = max((s[0] + s[3]) for s in segs
-              if PSRAM_IMG[0] <= s[0] < PSRAM_IMG[1]) if xip else 0
+    # filesz, not memsz: only segments with file content are staged by the
+    # loader. __uninitialized_psram data (the sampler slots) is allocated above
+    # the image and never written, so it does not consume the reservation.
+    staged = [s for s in segs if PSRAM_IMG[0] <= s[0] < PSRAM_IMG[1] and s[2]]
+    top = max((s[0] + s[2]) for s in staged) if staged else 0
     if top > PSRAM_IMG[1]:
         fails.append(f"image top 0x{top:08X} exceeds the loader's 1 MB "
                      f"reservation ending 0x{PSRAM_IMG[1]:08X}")
@@ -150,7 +151,7 @@ def main():
                      f"{(PSRAM_IMG[1]-top)//1024} KB spare in the reservation")
 
     for vma, lma, fsz, msz, flg in segs:
-        if vma >= PSRAM_DAT and msz and vma < top:
+        if vma >= PSRAM_IMG[0] and not fsz and msz and vma < top:
             fails.append(f"PSRAM data segment 0x{vma:08X} overlaps the image "
                          f"(top 0x{top:08X})")
 
@@ -184,7 +185,6 @@ def main():
 
     expect(TIMING_CRITICAL, "SRAM",
            "executes while PSRAM QMI timing is stale during the boot re-clock")
-    expect(AUDIO_PATH, "SRAM", "5.2 ms capture deadline")
     expect(MUST_STAY_PSRAM, "PSRAM-image",
            "UI code in SRAM defeats the purpose of this build")
 
@@ -295,7 +295,7 @@ def main():
                      "in default_text_excludes.incl has grown too large")
 
     # ---- report ---------------------------------------------------------
-    print("orcastra_psram structural check\n" + "-" * 34)
+    print("orcastra structural check\n" + "-" * 34)
     for n in notes:
         print(f"  ok   {n}")
     if fails:

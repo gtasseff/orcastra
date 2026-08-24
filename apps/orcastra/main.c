@@ -38,7 +38,7 @@
 //
 // The shipping build EXECUTES FROM PSRAM (target orcastra_psram) so this file's
 // ~186 KB of code costs PSRAM rather than SRAM, leaving SRAM for .bss and the
-// audio path. sd_entry.c handles that entry; read it before changing boot order.
+// audio path. The BSP's PSRAM bootstrap handles that entry.
 //
 // MIC passthrough: TX and RX share ONE PIO state machine, so they are perfectly
 // sample-locked. We run a 4-block TX ring (1024 frames) and write each completed
@@ -66,6 +66,7 @@
 #include "keys.h"
 #include "agentio/agentio.h"
 #include "input/uartkbd.h"
+#include "input/app_recovery.h"
 #include "sensors/bmi323.h"
 #include "sensors/opt4001.h"
 #include "sensors/bmm350.h"
@@ -73,19 +74,6 @@
 #include "fx.h"
 #include "vox.h"
 #include "voice_data.h"
-
-// Boot-stage breadcrumb, defined in sd_entry.c (SD-launched builds only). A
-// launched app that dies early has no screen, no RTT and a LOCKUP PC, so this
-// fixed never-zeroed SRAM word is the only thing left to read. No-op in the
-// SWD/flash target, which has a debugger and does not need it.
-#ifdef ORCASTRA_SD_BOOT_TRACE
-extern uint32_t sd_boot_stage;
-// PSRAM-resident replacement for board_init(); see sd_entry.c.
-void sd_entry_board_init_psram_resident(void);
-#define SD_BOOT_STAGE(n) do { sd_boot_stage = (n); __compiler_memory_barrier(); } while (0)
-#else
-#define SD_BOOT_STAGE(n) ((void)0)
-#endif
 
 // Big-endian RGB565 (the panel sends the high byte first).
 static inline uint16_t rgb565_be(uint8_t r, uint8_t g, uint8_t b) {
@@ -3993,61 +3981,6 @@ static void seed_modem_sample(void) {
                              picpwr_zone_bit(PICPWR_ZONE_DEBUG_PROBE))
 
 #define VOICE_SLOT 1                    /* YELLOW */
-#if defined(ORCASTRA_SD_NO_VOICE) && ORCASTRA_SD_NO_VOICE
-// Voice sample excluded from the SD image: the two-hop bootloader corrupts
-// large staged images (bench 2026-08-06: 15 KB ok, 123/205 KB garbage - trunk
-// bug, reported), and keeping the image small is also just the blessed
-// architecture. The sample ships as a raw PSRAM sidecar instead:
-//
-//     h\v\s voice.bin 700000        (STAGE FIRST, never reset before launch)
-//     h\v\p orcastra_sd.uf2         (or the /apps picker - same path)
-//
-// tools/make_voice_sidecar.py builds voice.bin: 12-byte header (magic 'VOX1',
-// rate, sample count) + int8 samples. The header is the offset-agreement
-// check the loader itself doesn't provide: h\v\s validates nothing, so a
-// mismatched offset must fail HERE, loudly, not decode garbage into slot 1.
-// +0x700000 clears the image (~124 KB at 0x11000000) AND the app's runtime
-// PSRAM data (0x11100000..0x115B0000 vox slots) - staged data survives the
-// launch because the loader rewrites only the image extent.
-#define VOICE_SIDECAR_ADDR  (0x11000000u + 0x700000u)
-#define VOICE_SIDECAR_MAGIC 0x31584F56u   /* 'VOX1' little-endian */
-static void seed_voice_sample(void) {
-    const volatile uint32_t *hdr = (const volatile uint32_t *)VOICE_SIDECAR_ADDR;
-    uint32_t magic = hdr[0], rate = hdr[1], len = hdr[2];
-    if (magic != VOICE_SIDECAR_MAGIC || rate == 0 || rate > 48000 ||
-        len == 0 || len > 0x100000) {
-        DIAG("vox: no voice sidecar at +0x700000 (magic=%08x) - slot %d empty\n",
-             (unsigned)magic, VOICE_SLOT);
-        return;
-    }
-    const volatile signed char *smp =
-        (const volatile signed char *)(VOICE_SIDECAR_ADDR + 12u);
-    unsigned cap = 0;
-    int16_t *d = vox_seed_begin(VOICE_SLOT, &cap);
-    if (!d) return;
-    absolute_time_t t0 = get_absolute_time();
-    /* linear interpolation; step < 1 so we are upsampling */
-    float step = (float)rate / (float)FX_FS;
-    float pos = 0.0f;
-    unsigned n = 0;
-    while (n < cap) {
-        unsigned i = (unsigned)pos;
-        if (i + 1 >= len) break;
-        float fr = pos - (float)i;
-        float a = (float)smp[i];
-        float b = (float)smp[i + 1];
-        float v = (a + (b - a) * fr) * (32767.0f / 127.0f);
-        if (v >  32700.0f) v =  32700.0f;
-        if (v < -32700.0f) v = -32700.0f;
-        d[n++] = (int16_t)v;
-        pos += step;
-    }
-    vox_seed_commit(VOICE_SLOT, n);
-    DIAG("vox: seeded slot %d from SIDECAR (%u samples @%u Hz) in %lld us\n",
-         VOICE_SLOT, n, (unsigned)rate,
-         absolute_time_diff_us(t0, get_absolute_time()));
-}
-#else
 static void seed_voice_sample(void) {
     unsigned cap = 0;
     int16_t *d = vox_seed_begin(VOICE_SLOT, &cap);
@@ -4073,7 +4006,6 @@ static void seed_voice_sample(void) {
     DIAG("vox: seeded slot %d (voice) %u samples in %lld us\n",
          VOICE_SLOT, n, absolute_time_diff_us(t0, get_absolute_time()));
 }
-#endif
 
 // SD-launch boot trace (_sd target only): paints a step marker top-right as
 // each init stage completes, so a freeze on a menu-launched unit is diagnosable
@@ -4098,23 +4030,10 @@ static void sd_bt(char c) {
 #endif
 
 int main(void) {
-    // Boot-stage breadcrumbs for SD-launched builds; see sd_entry.c. These
-    // bracket board_init() because that is where a launched app dies with no
-    // screen, no RTT and a LOCKUP PC -- i.e. with nothing else to read.
-    SD_BOOT_STAGE(10);            // reached main(); all runtime init survived
-#if defined(ORCASTRA_PSRAM_INHERIT_TIMING) && ORCASTRA_PSRAM_INHERIT_TIMING
-    // PSRAM-RESIDENT build. board_init()'s prologue calls psram_reinitialize(),
-    // which tears down and re-initialises the very chip holding our instruction
-    // stream -- that is what locked the CPU up on the first two attempts. Note
-    // wilibsp's board_init_psram() is NOT an alternative: despite the name it
-    // calls psram_reinitialize() too. Ours raises the clock with a pre-loaded
-    // QMI timing that is legal at both clocks, then runs the peripheral tail.
-    // Details, and the three things that had to be right, in sd_entry.c.
-    sd_entry_board_init_psram_resident();
-#else
-    board_init();   // 250 MHz (audio-optimal MCLK) + vreg + clk_peri re-source + I2C1
-#endif
-    SD_BOOT_STAGE(11);            // board init returned: clocks, peripherals, I2C1
+    // Clocks, vreg and the QMI re-time are already done by the BSP PSRAM
+    // bootstrap before main() is entered; board_init() detects that and
+    // brings up the inherited peripherals only.
+    board_init();
     DIAG("\n=== orcastra: tone + mic + FX pad boot ===\n");
 #if defined(ORCASTRA_SD_BOOT_MARKERS) && ORCASTRA_SD_BOOT_MARKERS
     // Marker build only: bring the panel up FIRST (display rail is on in the PIC
@@ -4131,8 +4050,18 @@ int main(void) {
     // (bench 2026-07-29: codec rail-up mid-boot wedged SDA — codec NAKs
     // then bus timeouts, audio engine then blocks on missing I2S clocks).
     // Requesting first means peripherals initialize onto stable rails.
-    uartkbd_init();
-    DIAG("uartkbd: init (buttons live)\n");
+    // Performs uartkbd_init() itself (input/app_recovery.h). Do not also
+    // call uartkbd_init(): it claims a DMA channel and is not idempotent.
+    // It belongs HERE rather than later because the power-rail block below
+    // needs the keyboard link for picpwr status frames, and st7796_init()
+    // does not run until after that block.
+    //
+    // The rail waits below pump uartkbd_task(), NOT fw2_app_recovery_task():
+    // recovery reboots to the display loader, and doing that before the panel
+    // is up gives the user a blank screen with no indication of why. Recovery
+    // is armed from the main loop onward, once there is a UI to leave.
+    fw2_app_recovery_init();
+    DIAG("uartkbd: init (buttons live, HOME recovery armed)\n");
     sd_bt('P');
     {
         // Status frames arrive ~1/s; wait up to 3 s for the first one so
@@ -4826,7 +4755,9 @@ int main(void) {
         // Colored buttons: poll the keyboard coprocessor; on the EQ page
         // GREY/YELLOW/GREEN/BLUE/RED grab bands 1..5 (colors match the
         // on-screen handles). Other pages just drain the event queue.
-        uartkbd_task();
+        // This also services HOME recovery, which reboots to the display
+        // loader after a 5 s hold; it must run on every main-loop pass.
+        fw2_app_recovery_task();
         // ---- Escape hatch: hold BLUE through the first 8 s after boot ----
         // Drops the display CPU into its USB (BOOTSEL) bootloader so this
         // app can ALWAYS be reflashed by drag-drop, with no debug probe and
@@ -6318,7 +6249,7 @@ int main(void) {
                 bool sent = picpwr_send(&req);
                 uint32_t rails = 0;
                 for (int i = 0; i < 100; i++) {   // ride out the rail walk
-                    uartkbd_task();
+                    fw2_app_recovery_task();
                     sleep_ms(25);
                 }
                 bool on = picpwr_rails(&rails) &&
