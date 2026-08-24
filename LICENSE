@@ -1,0 +1,45 @@
+MIT License
+
+Copyright (c) 2026 George Tasseff
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+DEPENDENCIES, which are NOT covered by the license above and keep their own
+terms:
+
+- external/wilibsp — the FREE-WILi 2 board support package, fetched as a git
+  submodule from https://github.com/freewili/wilibsp. MIT. It vendors
+  third-party components that keep their own permissive licenses (SEGGER RTT,
+  (c) SEGGER Microcontroller GmbH; FatFs R0.15b, (C) ChaN) — see that repo's
+  own LICENSE file.
+
+- The Raspberry Pi Pico SDK, fetched by your toolchain rather than vendored
+  here. BSD-3-Clause.
+
+AUDIO ASSET PROVENANCE
+
+apps/orcastra/voice_data.c contains a synthesised singing voice. The melody is
+"Daisy Bell" (1892), which is in the public domain. The audio itself is
+generated entirely from a source-filter model — a buzzy clipped-saw excitation
+through three formant resonators — and no part of any recording was sampled,
+processed or included. Every other sound in this project (drums, synth
+waveforms, the reverb and delay tanks, the sampler's seed content) is likewise
+synthesised at build time or on the device.
