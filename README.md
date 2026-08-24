@@ -199,22 +199,22 @@ If you already cloned without `--recursive`:
 git submodule update --init --recursive
 ```
 
-### The two build targets
+### The build
 
-| target | where it runs | use it for |
-|---|---|---|
-| `orcastra_psram` → **`orcastra.uf2`** | executes in place from PSRAM | the real thing; the only variant with SRAM to spare |
-| `orcastra_sd` | staged in PSRAM, copied to SRAM to run | comparison / fallback |
+There is one target, `orcastra`, and it produces `orcastra.uf2`. It
+executes in place from PSRAM, staged at `0x11000000` by the display loader.
 
-Both load at `0x11000000`, so **nothing here can be programmed into the
-device's flash**, by design — that address range holds the stock display
-firmware, which is the bootloader that launches apps from the card. Apps are
-delivered by copying the `.uf2` to `/apps`. There is no `fw flash`.
+The scheme comes from the BSP: `fw2_psram_app()` supplies the linker scripts,
+the SRAM-resident bootstrap that raises the clock and re-times the QMI before
+entering PSRAM-resident `main()`, the app metadata record, and UF2 generation.
+Nothing here can be programmed into the device's flash, by design — that range
+holds the stock display firmware, which is the bootloader that launches apps
+from the card.
 
-The PSRAM-resident target is the interesting one and it is not free — see
-[`AGENTS.md`](AGENTS.md) for why the boot re-clock has to happen from SRAM and
-what happens if it doesn't. `python tools/check_psram_xip.py` asserts the whole
-scheme structurally after any change to the linker scripts.
+`python tools/check_psram_xip.py` asserts the properties an app can still get
+wrong after any change to the linker overrides or source list; several of them
+fail silently on hardware rather than at link time. See
+[`AGENTS.md`](AGENTS.md) invariant 21.
 
 ### Optional: the screenshot / input harness
 
@@ -229,11 +229,8 @@ device:
 python tools/agentio.py screenshot -o shot.png
 ```
 
-`touch x y`, `press`, `hold`, `release` and `type` work too. Note the harness
-costs ~45 KB of SRAM under `copy_to_ram`, so `orcastra_sd` is skipped when it's
-enabled, on purpose. On the PSRAM-resident target its code lands in PSRAM and
-the real cost is about 7 KB of SRAM, which is why that target is the only one
-with room for it.
+`touch x y`, `press`, `hold`, `release` and `type` work too. The harness code
+lands in PSRAM alongside the app, so it costs about 7 KB of SRAM.
 
 ---
 
@@ -267,13 +264,12 @@ apps/orcastra/
   keys.c/.h     chord keyboard
   viz.c/.h      spectrum / scope visualiser
   voice_data.c  the synthesised voice, generated (see LICENSE for provenance)
-  sd_entry.c    launched-from-SD entry: IRQ handover, PSRAM re-time, clocks
-  psram_xip_link/   linker overrides that keep the timing-critical set in SRAM
+  psram_link_override/  one linker override: adds libgcc to the BSP's SRAM
+                bootstrap section (see AGENTS.md invariant 21)
 tools/
   fw.py         build / flash / RTT log driver
   agentio.py    screenshot + input injection over SWD
   check_psram_xip.py   structural verification of the PSRAM-execution build
-  read_boot_stage.py   read the boot breadcrumb from a hung app, without halting
 ```
 
 ---
@@ -340,19 +336,6 @@ Kept honest on purpose — these are known gaps, not vague ambitions.
 - **Lower latency.** Currently ~24–32 ms, which musicians on the bench have
   called acceptable and fun. Going lower means smaller capture blocks, which is
   a BSP-level change rather than an app one.
-
-### Housekeeping
-
-- **Adopt the BSP's own `fw2_psram_app()`.** wilibsp provides it (see
-  `bsp/CMakeLists.txt`), and it supplies the PSRAM-execution linker scripts and
-  startup shim that `apps/orcastra/psram_xip_link/` currently hand-rolls.
-  Switching would delete that directory outright — the local copies exist only
-  because they were written before the helper was found, which is a recurring
-  lesson: **read the BSP first.** Nearly everything in `sd_entry.c` was
-  discoverable there.
-- **Move the submodule pin forward.** It is deliberately not at upstream tip;
-  invariant 22 in `AGENTS.md` explains what breaks past `a5baa71` and what needs
-  to happen upstream before the pin can advance.
 
 Issues and pull requests welcome on any of these.
 

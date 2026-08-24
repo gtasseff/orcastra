@@ -22,15 +22,8 @@ import importlib.util, pathlib, re, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 WILIBSP_FW = REPO / "wilibsp" / "tools" / "fw.py"
-# The PSRAM-resident target is the only one with SRAM room for the harness, so
-# it is the only one worth pinning against. NOTE the asymmetry that bit us: the
-# target is `orcastra_psram` (hence orcastra_psram.elf) but its UF2 is named
-# plainly `orcastra.uf2`, because the on-device App Explorer lists FILENAMES and
-# "orcastra" is what should appear in the menu. Pointing this at orcastra.elf --
-# the name that matches the UF2 rather than the target -- made every harness
-# command exit with "need toolchain nm and .../orcastra.elf" instead of running.
-# The fallbacks let it still work against a copy_to_ram build if one is current.
-ELF_CANDIDATES = ["orcastra_psram.elf", "orcastra_sd.elf"]
+# The target is `orcastra`, so the ELF and the UF2 share that name.
+ELF_CANDIDATES = ["orcastra.elf"]
 PICO_ROOT = pathlib.Path.home() / ".pico-sdk"
 
 

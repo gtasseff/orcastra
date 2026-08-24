@@ -1,0 +1,119 @@
+INCLUDE section_no_flash_text.incl
+INCLUDE sections_arm_ex.incl
+INCLUDE section_binary_info.incl
+SECTIONS
+{
+    .sram_bootstrap :
+    {
+        __sram_boot_start__ = .;
+        KEEP(*(.sram_bootstrap .sram_bootstrap.*))
+        *libfreewili2_bsp.a:*(.text* .rodata* .srodata*)
+        /* LOCAL OVERRIDE of wilibsp/bsp/app/psram_link/sections_no_flash.incl.
+         * The only change is the libgcc line below; everything else is a copy.
+         *
+         * board_init_psram() raises clk_sys and then calls clock_configure()
+         * and psram_configure_params() before psram_reinitialize() re-times the
+         * QMI. Both perform 64-bit division, which branches through an SRAM
+         * veneer into __aeabi_uldivmod. Without this line that helper is
+         * PSRAM-resident, so it is fetched through the window being
+         * reconfigured. Reported upstream; remove this directory once the
+         * bootstrap section carries libgcc itself.
+         */
+        *libgcc.a:*(.text* .rodata* .srodata*)
+        *platform.c.obj(.text* .rodata* .srodata*)
+        *common.c.obj(.text* .rodata* .srodata*)
+        *panic.c.obj(.text* .rodata* .srodata*)
+        *stdlib.c.obj(.text* .rodata* .srodata*)
+        *claim.c.obj(.text* .rodata* .srodata*)
+        *critical_section.c.obj(.text* .rodata* .srodata*)
+        *lock_core.c.obj(.text* .rodata* .srodata*)
+        *mutex.c.obj(.text* .rodata* .srodata*)
+        *sem.c.obj(.text* .rodata* .srodata*)
+        *sync.c.obj(.text* .rodata* .srodata*)
+        *sync_spin_lock.c.obj(.text* .rodata* .srodata*)
+        *gpio.c.obj(.text* .rodata* .srodata*)
+        *irq.c.obj(.text* .rodata* .srodata*)
+        *timeout_helper.c.obj(.text* .rodata* .srodata*)
+        *ticks.c.obj(.text* .rodata* .srodata*)
+        *queue.c.obj(.text* .rodata* .srodata*)
+        *uart.c.obj(.text* .rodata* .srodata*)
+        *vreg.c.obj(.text* .rodata* .srodata*)
+        *pll.c.obj(.text* .rodata* .srodata*)
+        *timer.c.obj(.text* .rodata* .srodata*)
+        *datetime.c.obj(.text* .rodata* .srodata*)
+        *pheap.c.obj(.text* .rodata* .srodata*)
+        *divider.c.obj(.text* .rodata* .srodata*)
+        *time.c.obj(.text* .rodata* .srodata*)
+        *clocks.c.obj(.text* .rodata* .srodata*)
+        *watchdog.c.obj(.text* .rodata* .srodata*)
+        *bootrom.c.obj(.text* .rodata* .srodata*)
+        *bootrom_lock.c.obj(.text* .rodata* .srodata*)
+        *flash.c.obj(.text* .rodata* .srodata*)
+        *xosc.c.obj(.text* .rodata* .srodata*)
+        *boot_lock.c.obj(.text* .rodata* .srodata*)
+        *runtime_init.c.obj(.text* .rodata* .srodata*)
+        *runtime_init_clocks.c.obj(.text* .rodata* .srodata*)
+        *runtime_init_stack_guard.c.obj(.text* .rodata* .srodata*)
+        *malloc.c.obj(.text* .rodata* .srodata*)
+        *cxa_guard.c.obj(.text* .rodata* .srodata*)
+        *atomic.c.obj(.text* .rodata* .srodata*)
+        *newlib_interface.c.obj(.text* .rodata* .srodata*)
+        *thread_local.c.obj(.text* .rodata* .srodata*)
+        *i2c.c.obj(.text* .rodata* .srodata*)
+        *spi.c.obj(.text* .rodata* .srodata*)
+        *dma.c.obj(.text* .rodata* .srodata*)
+        *psram.c.obj(.text* .rodata* .srodata*)
+        *pio.c.obj(.text* .rodata* .srodata*)
+        *printf.c.obj(.text* .rodata* .srodata*)
+        . = ALIGN(4);
+        __sram_boot_end__ = .;
+    } > RAM AT> PSRAM
+    __sram_boot_load_source__ = LOADADDR(.sram_bootstrap);
+}
+SECTIONS
+{
+    .psram_text :
+    {
+        *(.text*)
+        . = ALIGN(4);
+        *(.init) *(.fini)
+        *crtbegin.o(.ctors) *crtbegin?.o(.ctors)
+        *(EXCLUDE_FILE(*crtend?.o *crtend.o) .ctors)
+        *(SORT(.ctors.*)) *(.ctors)
+        *crtbegin.o(.dtors) *crtbegin?.o(.dtors)
+        *(EXCLUDE_FILE(*crtend?.o *crtend.o) .dtors)
+        *(SORT(.dtors.*)) *(.dtors)
+        *(.eh_frame*)
+    } > PSRAM
+    .psram_rodata :
+    {
+        . = ALIGN(4);
+        *(.rodata*) *(.srodata*)
+        *(SORT_BY_ALIGNMENT(SORT_BY_NAME(.flashdata*)))
+        . = ALIGN(4);
+    } > PSRAM
+}
+INCLUDE section_generated_post_text.incl
+INCLUDE section_extra_post_text.incl
+INCLUDE sections_no_flash_data.incl
+INCLUDE section_generated_post_data.incl
+INCLUDE section_extra_post_data.incl
+INCLUDE sections_psram.incl
+INCLUDE section_xip_ram.incl
+INCLUDE section_heap.incl
+INCLUDE sections_scratch.incl
+INCLUDE section_generated_post_scratch.incl
+INCLUDE section_extra_post_scratch.incl
+INCLUDE sections_stack.incl
+INCLUDE section_end.incl
+INCLUDE section_no_flash_end.incl
+INCLUDE section_generated_post_end.incl
+INCLUDE section_extra_post_end.incl
+INCLUDE section_platform_end.incl
+INCLUDE section_generated_post_platform_end.incl
+INCLUDE section_extra_post_platform_end.incl
+
+/* The DISPLAY loader reserves SRAM above this boundary.  The vector-table
+ * initial MSP must remain in the loadable-app SRAM window even though the
+ * RP2350 SDK normally places it at the top of the scratch banks. */
+__StackTop = 0x20070000;

@@ -2,10 +2,10 @@
 """fw — Orcastra task runner (cross-platform), adapted from wilibsp/tools/fw.py.
 
 Commands:
-  fw build [target]  configure+build a target for the RP2350B (default orcastra_psram)
+  fw build [target]  configure+build a target for the RP2350B (default orcastra)
   fw rtt [-s N]      stream SEGGER RTT diagnostics (N seconds, 0 = until Ctrl+C)
 
-Targets are orcastra_psram (ships; executes from PSRAM) and orcastra_sd, both
+Targets are orcastra (ships; executes from PSRAM) and orcastra_sd, both
 built from apps/orcastra -- so a target name is NOT an app directory name.
 Artifacts land in build/apps/orcastra/.
 
@@ -24,7 +24,7 @@ setup is required. Add --print to print commands instead of running them.
 import argparse, os, pathlib, socket, subprocess, sys, time
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_APP = "orcastra_psram"
+DEFAULT_APP = "orcastra"
 OPENOCD_CFG = str(REPO_ROOT / "tools" / "openocd" / "freewili2.cfg")
 RTT_PORT = 9090
 # RP2350 SRAM is 0x20000000..0x20082000; scan the whole range for the RTT block.

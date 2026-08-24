@@ -53,17 +53,13 @@ orcastra/
     keys.c/.h             chord keyboard (FM e-piano / saw strings)
     viz.c/.h              spectrum + scope visualiser
     voice_data.c/.h       synthesised voice, generated; see LICENSE for provenance
-    sd_entry.c            launched-from-SD entry: IRQ handover, PSRAM re-time,
-                          clocks. THE most delicate file in the repo (inv. 21)
-    psram_xip_link/       linker overrides: execute-in-place from PSRAM, with
-                          the timing-critical + audio set forced into SRAM
-    psram_link/           the copy_to_ram variant (staged in PSRAM, runs in SRAM)
+    psram_link_override/  ONE linker override: adds libgcc to the BSP's SRAM
+                          bootstrap section. Delete once upstream carries it.
   tools/
     fw.py / fw.cmd        build + RTT driver (no flash path — see below)
     agentio.py            screenshot + input injection over SWD
     check_psram_xip.py    structural verification of the PSRAM-execution build
-    read_boot_stage.py    read the boot breadcrumb from a hung app, no halt
-    make_voice_sidecar.py generate the voice blob
+                          (walks the re-time call graph THROUGH veneers)
     openocd/*.cfg         CMSIS-DAP + RP2350 OpenOCD configs
   docs/
     ADDING-AN-EFFECT.md   the extension guide
@@ -82,7 +78,7 @@ hardcode a version here.
 
 | Command | What it does |
 |---|---|
-| `fw build [target]` | Configure (first run) + build one target (default `orcastra_psram`) → `build/apps/orcastra/<target>.elf`. The app DIRECTORY is `apps/orcastra`; the TARGETS are `orcastra_psram` and `orcastra_sd`. Target name ≠ directory name, so never compose a path from the target name. |
+| `fw build [target]` | Configure (first run) + build one target (default `orcastra`) → `build/apps/orcastra/<target>.elf`. The app DIRECTORY is `apps/orcastra`; the TARGET is `orcastra`. Target name ≠ directory name, so never compose a path from the target name. |
 | `fw rtt [-s N]` | Stream SEGGER RTT diagnostics (OpenOCD RTT server, port 9090); `-s N` captures N seconds then exits |
 
 **This driver has no `flash` command, by design.** Both targets load at
@@ -135,7 +131,7 @@ deliberate — see invariant 22 before moving it.
    normally `copy_to_ram` (code+data+bss all inside 512 KB of SRAM — watch the
    budget), and big buffers go in **PSRAM** (`PSRAM_BASE 0x11000000`, 8 MB
    APS6404L, `bsp/platform/psram.h`). **Orcastra's shipping target does NOT do
-   this**: `orcastra_psram` executes in place from PSRAM and only copies `.data`
+   this**: `orcastra` executes in place from PSRAM and only copies `.data`
    to SRAM, which is what buys the audio path its headroom — see invariant 21
    for the scheme and the trap in it. A UI-heavy app whose `.text` outgrows SRAM
    has the same two choices. Never set `PICO_EMBED_XIP_SETUP=1` (boot-loops).
@@ -324,9 +320,9 @@ two-press chord text engine on top, if you need text entry.
   `fw rtt -s 8` (expect boot banner + `codec: input path ready`). With
   `-DFW2_AGENTIO=ON`, add `python tools/agentio.py screenshot -o shot.png` and
   actually LOOK at the PNG — a capture that succeeds and shows the wrong thing
-  is the failure worth catching. If the app dies before its first DIAG, read
-  the breadcrumb with `tools/read_boot_stage.py` (no halt, so the three-finger
-  YELLOW+GREEN+BLUE reset still works — invariant 24).
+  is the failure worth catching. If the app dies early, the BSP's PSRAM
+  bootstrap emits `psram: bootstrap copied` and `psram: constructors complete`
+  over RTT before `main()`, so the log itself localises the failure.
 - Conventional Commits (`feat:`, `fix:`, `docs:`, ...), imperative subject.
 - **This repo is PUBLIC.** Everything committed here is world-readable, so:
   no unit serial numbers, no local absolute paths, no named colleagues, and
@@ -418,7 +414,7 @@ two-press chord text engine on top, if you need text entry.
 19. **SD-card app delivery (`/apps` on the card): the loader routes a UF2 by
     the address its blocks target, never by filename.** 0x11000000 = PSRAM
     app (flash untouched — OUR path, targets `orcastra_sd` and
-    `orcastra_psram`), 0x20000000 = RAM app (192 KiB loaded-content cap — an
+    `orcastra`), 0x20000000 = RAM app (192 KiB loaded-content cap — an
     earlier 448 KB figure came from an abandoned loader branch and is wrong),
     0x10000000 = FIRMWARE UPDATE that overwrites the display firmware.
     NEVER put a raw .bin in /apps — it carries no address and goes down the
@@ -448,8 +444,8 @@ two-press chord text engine on top, if you need text entry.
     runtime, never assume it. When bringing up a new launch path, walk it in
     stages rather than debugging the whole app at once: a bare fill-the-screen app first, then
     the sidecar-blob contract, then orcastra_sd — whose boot-trace markers
-    name any stage that freezes. `tools/read_boot_stage.py` reads the
-    breadcrumb over SWD without halting the core.
+    name any stage that freezes. The BSP's PSRAM bootstrap
+    emits its progress over RTT before `main()` runs.
 
 20. **Continuous touch controls: use the shared mappers, never hand-roll the
     arithmetic** (2026-08-06). Two corrections apply to EVERY slider, strip and
@@ -505,34 +501,43 @@ two-press chord text engine on top, if you need text entry.
     (`EQ_SLX`/`EQ_SLW`) rather than editing the shared `SLIDER_*`, or the revert
     drags every effect settings page along with it.
 
-21. **Two PSRAM app schemes exist and the difference is SRAM, not speed**
-    (2026-08-07). Both stage the image at `0x11000000` — the loader routes on
-    that address (invariant 19) — but they execute differently:
-    `apps/orcastra/psram_link` + `pico_set_binary_type(copy_to_ram)` copies
-    `.text`/`.rodata`/`.data` into SRAM and runs there (~125 KB of SRAM);
-    `apps/orcastra/psram_xip_link` with **no** `pico_set_binary_type()` call
-    leaves `.text`/`.rodata` at VMA==LMA in PSRAM to execute in place and copies
-    only ~28 KB (`orcastra_psram`). The second frees ~96 KB — 22.6 KB of SRAM
-    free becomes 118.6 KB — which matters because `.bss` alone is 368 KB
-    (`gbuf` 131,072, `strip_buf` 46,080, `sbuf`/`s_raw` 32,768 each). Latency is
-    NOT a reason to avoid XIP-from-PSRAM: a production build using it was
-    demoed and latency-measured with no audible penalty. **THE TRAP:** `board_init()` raises
-    `clk_sys` to 250 MHz, which invalidates the QMI M1 timing for PSRAM until
-    `psram_reinitialize()` completes, and under the XIP scheme the CPU fetches
-    its own instructions through that mis-timed window — so everything executing
-    in the gap (`psram.c`, `flash.c`, `clocks.c`, `pll.c`, `vreg.c`, `timer.c`,
-    `xip_cache.c` and **`board.c` itself**, the orchestrator that is easiest to
-    forget) must be forced RAM-resident. Do that by naming objects in an
-    overridden `default_text_excludes.incl`: whatever is excluded from the flash
-    `.text` section is picked up by `*(.text*)` in `section_default_data.incl`'s
-    RAM `.data` section. The audio objects (`fx`/`vox`/`synth`/`drums`/`keys`,
-    21,744 bytes) are in that list for the 5.2 ms deadline, not for correctness.
-    Verify with `python tools/check_psram_xip.py` — it asserts VMA==LMA in PSRAM,
-    SRAM residency of the timing-critical and audio symbols, that `main` stays
-    in PSRAM, and that the image fits the 1 MB reservation. Cross-checked against a
-    known-good PSRAM-resident build: our image reproduces its address-literal
-    ratio (1.63) and copy-region size (28,024 vs 29,108) almost exactly, which
-    is the cheapest available confirmation that the scheme is really in force.
+21. **The app executes from PSRAM via the BSP's `fw2_psram_app()`. Do not
+    hand-roll any part of it.** The wrapper supplies the linker scripts, the
+    SRAM-resident bootstrap, the FW2App metadata record and UF2 generation. The
+    bootstrap copies `.data`, clears `.bss`, installs the vector table, then
+    calls `board_init_psram()` — vreg, `clk_sys` to 250 MHz, `clk_peri`, and the
+    QMI re-time — before entering PSRAM-resident `main()`. `main()` still calls
+    `board_init()`; the BSP records that the bootstrap already ran and performs
+    only the peripheral tail. Never reintroduce a clock or QMI re-time in this
+    app: that belongs upstream.
+
+    **THE HAZARD.** Between the `clk_sys` raise and `psram_reinitialize()` the
+    QMI timing for PSRAM is stale, and the CPU is fetching its own instructions
+    through that window. Everything reachable in the gap must be SRAM-resident.
+    The BSP's `.sram_bootstrap` section covers the SDK and BSP objects, but the
+    exposure is easy to miss because a long-branch VENEER is itself SRAM-
+    resident: auditing direct callees shows all-SRAM while the real target sits
+    in PSRAM. `clock_configure()` and `psram_configure_params()` both divide
+    64-bit values, which reaches libgcc that way.
+    `apps/orcastra/psram_link_override/` adds libgcc to the section for exactly
+    this reason; delete that directory once the BSP carries the entry itself.
+
+    Verify with `python tools/check_psram_xip.py` after ANY change to the linker
+    overrides or the source list. It walks the re-time call graph THROUGH
+    veneers, which is the only mechanical way to catch this class of miss.
+
+    **The DSP runs from PSRAM, deliberately.** Forcing `fx`/`vox`/`synth`/
+    `drums`/`keys` into SRAM was measured against the 5.2 ms capture deadline
+    under a heavy chain (reverb, delay, EQ, pitch correction, drums and sampler
+    together): 80% audio-core load with them in SRAM, 81% from PSRAM. About 1.5
+    points does not justify carrying linker overrides, so they stay in PSRAM and
+    `check_psram_xip.py` asserts it.
+
+    **SRAM budget.** `.bss` is 368 KB and is 32 KB-aligned because the PDM
+    capture ring needs it, so `.sram_bootstrap` plus `.data` crossing a 32 KB
+    boundary costs a whole boundary in padding. At present they total ~36 KB,
+    which puts `.bss` at `0x20010000` and leaves 86.9 KB free. Shrinking that
+    pair back under 32 KB would recover roughly 29 KB.
 
 22. **ONE submodule: `wilibsp`. Keep it that way** (2026-08-23). The
     project declares exactly one dependency, and that is the point — the app is
@@ -601,7 +606,7 @@ two-press chord text engine on top, if you need text entry.
     (only 10% over the APS6404L minimum, itself ambiguous 15-20 ns) and 22 ns
     gives 24.00 ns. The whole 21..24 ns window maps to the same field, so a
     small clock change cannot silently drop a cycle. It matters most for
-    `orcastra_psram`, which fetches instructions from PSRAM: there a marginal
+    `orcastra`, which fetches instructions from PSRAM: there a marginal
     read is a corrupted instruction, not a dropped pixel.
 
 24. **Three-finger reset: YELLOW + GREEN + BLUE held briefly returns the display
