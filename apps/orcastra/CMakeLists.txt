@@ -24,13 +24,13 @@ function(orcastra_app_metadata target)
     add_custom_command(
         OUTPUT "${_dir}/${target}_uf2_info.c"
         COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_CURRENT_LIST_DIR}/../../external/wilibsp/tools/gen_uf2_info.py"
+                "${CMAKE_CURRENT_LIST_DIR}/../../wilibsp/tools/gen_uf2_info.py"
                 --out "${_dir}/${target}_uf2_info.c"
                 --version "1"
                 --name "Orcastra"
                 --description "FreeWili 2 audio multi-tool: synth, sampler, drums, theremin, FX chain"
                 --repository "https://github.com/gtasseff/fw2-audio-demo"
-        DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../../external/wilibsp/tools/gen_uf2_info.py"
+        DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../../wilibsp/tools/gen_uf2_info.py"
         COMMENT "Generating FW2App metadata for ${target}"
         VERBATIM)
     target_sources(${target} PRIVATE "${_dir}/${target}_uf2_info.c")

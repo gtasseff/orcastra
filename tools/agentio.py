@@ -21,7 +21,7 @@ All arguments are forwarded verbatim to wilibsp's fw.py.
 import importlib.util, pathlib, re, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-WILIBSP_FW = REPO / "external" / "wilibsp" / "tools" / "fw.py"
+WILIBSP_FW = REPO / "wilibsp" / "tools" / "fw.py"
 # The PSRAM-resident target is the only one with SRAM room for the harness, so
 # it is the only one worth pinning against. NOTE the asymmetry that bit us: the
 # target is `orcastra_psram` (hence orcastra_psram.elf) but its UF2 is named

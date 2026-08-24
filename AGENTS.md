@@ -1,6 +1,6 @@
 # AGENTS.md — Orcastra engineering notes
 
-**Read `external/wilibsp/AGENTS.md` completely, through EOF, before inspecting
+**Read `wilibsp/AGENTS.md` completely, through EOF, before inspecting
 or changing this project.** That file is the authoritative FREE-WILi 2 BSP and
 app contract — build wrappers, the FW2App requirements every app must meet, the
 power-zone rules and the hardware-verification procedure. It is intentionally
@@ -20,7 +20,7 @@ this file for the constraints.
 
 A real-time audio multi-tool for the **FREE-WILi 2** ("FW2") — effects,
 sampler, drum machine, synth, theremin, chord keys, tuner and visualiser. It
-builds against the upstream `freewili2_bsp` library (the `external/wilibsp`
+builds against the upstream `freewili2_bsp` library (the `wilibsp`
 submodule) and nothing else; see invariant 22 for why that constraint is
 load-bearing rather than incidental.
 
@@ -39,7 +39,7 @@ the repo, and invariant 21 is the one to read before touching it.
 ```
 orcastra/
   CMakeLists.txt          top-level: PICO_BOARD=freewili2, pico_sdk_init,
-                          add_subdirectory(external/wilibsp/bsp) + apps.
+                          add_subdirectory(wilibsp/bsp) + apps.
                           ALSO sets PICO_DEFAULT_PSRAM_MIN_DESELECT (inv. 23)
                           and the FW2_AGENTIO option (harness, PSRAM target only)
   CMakePresets.json       "target" configure/build preset (Ninja, build/)
@@ -68,7 +68,7 @@ orcastra/
   docs/
     ADDING-AN-EFFECT.md   the extension guide
   prebuilt/orcastra.uf2   the built app, so it can be tried without a toolchain
-  external/wilibsp        the ONE submodule (invariant 22)
+  wilibsp        the ONE submodule (invariant 22)
 ```
 
 ## Command vocabulary
@@ -99,7 +99,7 @@ GDB attaches on port 3333 while OpenOCD runs.
 
 ## The one submodule
 
-`external/wilibsp` — the FREE-WILi 2 board support package
+`wilibsp` — the FREE-WILi 2 board support package
 (<https://github.com/freewili/wilibsp>), MIT. We link its `freewili2_bsp`
 static library directly and use nothing else. Worth reading in it:
 `bsp/` (the peripheral drivers), `docs/hardware/{pinmap,facts,catalog}.md`,
@@ -217,7 +217,7 @@ Pins: DIN=GPIO4 (ADC in), DATA=GPIO5 (DAC out), LRCK=GPIO6, BCLK=GPIO7
 apps/orcastra/fx.h; the driver examples below still say 16 kHz — same
 mechanism, pass 48000 and override codec reg 0x07 to 0x0000 for 48 kHz
 filters). Mono speaker / stereo-capable jack. Docs:
-`external/wilibsp/docs/drivers/audio.md` and `.../pdm.md`.
+`wilibsp/docs/drivers/audio.md` and `.../pdm.md`.
 
 ```c
 board_init();                                  // clocks first, always
@@ -312,7 +312,7 @@ two-press chord text engine on top, if you need text entry.
 
 ## Workflow expectations
 
-- **Reuse before writing**: look for the proven driver in `external/wilibsp`
+- **Reuse before writing**: look for the proven driver in `wilibsp`
   before writing hardware glue, and keep its naming (`st7796_*`, `ft6336_*`,
   `codec_nau88c10_*`, ...). Almost every peripheral on this board already has a
   driver there that someone has debugged on real hardware.
@@ -534,7 +534,7 @@ two-press chord text engine on top, if you need text entry.
     ratio (1.63) and copy-region size (28,024 vs 29,108) almost exactly, which
     is the cheapest available confirmation that the scheme is really in force.
 
-22. **ONE submodule: `external/wilibsp`. Keep it that way** (2026-08-23). The
+22. **ONE submodule: `wilibsp`. Keep it that way** (2026-08-23). The
     project declares exactly one dependency, and that is the point — the app is
     buildable from the FREE-WILi 2 board support package alone. 17 other
     submodules used to be declared; the build referenced **none** of them, and
@@ -542,7 +542,7 @@ two-press chord text engine on top, if you need text entry.
     `ow_*` call sites** — power zones actually go through the BSP's
     `input/picpwr.h`. All removed. If the OneWili display-link API is ever
     genuinely needed, do NOT add a top-level submodule: wilibsp already vendors
-    it at `external/wilibsp/libs/onewili`, so point at that and the
+    it at `wilibsp/libs/onewili`, so point at that and the
     one-dependency story survives.
     **THE PIN IS `8cdd5cb`** ("merge:
     resolve FW2App contract with target enforcement"), which is an ancestor of
@@ -566,7 +566,7 @@ two-press chord text engine on top, if you need text entry.
        `include(pico_sdk_import.cmake)` in the top-level CMakeLists.txt:
 
            set(PICO_PIO_USB_PATH
-               "${CMAKE_CURRENT_LIST_DIR}/external/wilibsp/bsp/third_party/Pico-PIO-USB")
+               "${CMAKE_CURRENT_LIST_DIR}/wilibsp/bsp/third_party/Pico-PIO-USB")
 
     2. Initialize the Pico SDK's own TinyUSB submodule, which the VS Code
        extension leaves unpopulated:
@@ -588,7 +588,7 @@ two-press chord text engine on top, if you need text entry.
 
 23. **PSRAM tCPH lives in the TOP-LEVEL CMakeLists, not per-app** (2026-08-23).
     `PICO_DEFAULT_PSRAM_MIN_DESELECT=22` is set with `add_compile_definitions()`
-    before `add_subdirectory(external/wilibsp/bsp bsp)`. It MUST be, because the
+    before `add_subdirectory(wilibsp/bsp bsp)`. It MUST be, because the
     consumer is `board_init()` in the BSP, which compiles **once** into the
     shared `freewili2_bsp` static library — a
     `target_compile_definitions(<app> PRIVATE ...)` silently does nothing, and
