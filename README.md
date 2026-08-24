@@ -37,15 +37,15 @@ That's the whole install. The app is ~425 KB and stages itself into PSRAM at
 `0x11000000`; your display firmware is untouched, and a power cycle puts you
 back in the launcher.
 
-> **Turn the volume down before you put headphones on.** The onboard speaker is
-> deliberately volume-limited (see [Sound safety](#sound-safety)); the 3.5 mm
-> jack is **not** — it runs full-scale, which is fine into an amp or an audio
-> interface and potentially very loud into headphones. Set the output pad to
-> `PAD 24DB` on the SETUP page first, then bring it up.
+> **Start at `PAD 24DB` before you put headphones on, then bring it up.** The
+> onboard speaker is deliberately volume-limited (see
+> [Sound safety](#sound-safety)); the 3.5 mm jack is **not** — it runs
+> full-scale, which is right for an amp or an audio interface and *loud* into
+> headphones.
 >
-> Note also that everything on the jack has been tested into line-level gear.
-> Plugging headphones *directly* into a production unit is on the
-> [roadmap](#roadmap--not-done-yet) as untested — if you try it, start quiet.
+> Bench check with in-ear monitors: they work fine, and they get loud.
+> `PAD 12DB` was plenty for comfortable listening, so there is no reason to go
+> anywhere near the top of the range on headphones.
 
 ---
 
@@ -314,10 +314,6 @@ Kept honest on purpose — these are known gaps, not vague ambitions.
   jack to the breakout disturbed the impedance and the unit stopped working with
   headphones plugged in, so publishing it as-is would just reproduce the fault
   in other people's builds. Needs a rework and a retest first.
-- **Headphones straight into the device's own jack.** Untested — everything on
-  the output path so far has gone into line-level gear or the onboard speaker.
-  Until someone checks it, treat headphone level as unknown and start with the
-  pad down.
 
 ### Audio
 

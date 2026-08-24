@@ -1018,6 +1018,12 @@ static void pdm_pop_block(int16_t *out, unsigned nreq) {
 // The open PDM mics also feed back almost instantly at loud levels, so loud is
 // allowed only for jack + a non-PDM input.
 //
+// "Allowed" is not "advisable". The jack is uncapped because it feeds amps and
+// audio interfaces, which want line level -- but the same setting goes into
+// headphones. Bench check 2026-08-24: in-ear monitors work fine and get loud,
+// with -12 dB comfortable for listening. So nothing here should ever DEFAULT a
+// jack route to a loud pad; make the user climb.
+//
 // THE SPEAKER CEILING IS -9 dB, raised from -12 dB. Worst case is a full-scale
 // CONTINUOUS sine, which this app really does produce -- the 1 kHz tone, the
 // theremin, and the synth with hold ON all sustain indefinitely -- so the

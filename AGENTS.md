@@ -339,7 +339,11 @@ two-press chord text engine on top, if you need text entry.
     29-46% of the rating); (b) a 2nd-order 900 Hz high-pass on the speaker
     route (audio pump) — content below the driver's ~1.7 kHz self-resonance
     produces raw cone excursion that damages the driver and sounds broken
-    regardless of level. The 3.5 mm jack path is full-range and unlimited.
+    regardless of level. The 3.5 mm jack path is full-range and unlimited --
+    correct for line-level gear, and genuinely loud on headphones: in-ear
+    monitors were verified working on 2026-08-24, with -12 dB comfortable and
+    the top of the range far past what anyone would want in their ears. The pad
+    is the only thing between a listener and full scale, so default low.
 
     The cap was **-12 dB until 2026-08-23**, raised on bench feedback that
     -12/-24 dB are "SO quiet" on the speaker. Derate against the 300 mW
