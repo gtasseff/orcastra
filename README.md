@@ -199,13 +199,17 @@ If you already cloned without `--recursive`:
 git submodule update --init --recursive
 ```
 
-### The three build targets
+### The two build targets
 
 | target | where it runs | use it for |
 |---|---|---|
 | `orcastra_psram` → **`orcastra.uf2`** | executes in place from PSRAM | the real thing; the only variant with SRAM to spare |
 | `orcastra_sd` | staged in PSRAM, copied to SRAM to run | comparison / fallback |
-| `orcastra_swd` | flash + copy to SRAM | the debug-probe development loop |
+
+Both load at `0x11000000`, so **nothing here can be programmed into the
+device's flash**, by design — that address range holds the stock display
+firmware, which is the bootloader that launches apps from the card. Apps are
+delivered by copying the `.uf2` to `/apps`. There is no `fw flash`.
 
 The PSRAM-resident target is the interesting one and it is not free — see
 [`AGENTS.md`](AGENTS.md) for why the boot re-clock has to happen from SRAM and
@@ -226,8 +230,10 @@ python tools/agentio.py screenshot -o shot.png
 ```
 
 `touch x y`, `press`, `hold`, `release` and `type` work too. Note the harness
-costs ~45 KB of SRAM, so it only fits the PSRAM-resident target — the other two
-are skipped when it's enabled, on purpose.
+costs ~45 KB of SRAM under `copy_to_ram`, so `orcastra_sd` is skipped when it's
+enabled, on purpose. On the PSRAM-resident target its code lands in PSRAM and
+the real cost is about 7 KB of SRAM, which is why that target is the only one
+with room for it.
 
 ---
 

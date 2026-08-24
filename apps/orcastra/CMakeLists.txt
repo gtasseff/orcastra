@@ -37,23 +37,29 @@ function(orcastra_app_metadata target)
     target_link_options(${target} PRIVATE -Wl,--undefined=fw2app_uf2_info)
 endfunction()
 
-# The copy_to_ram targets do not fit with the agentio harness linked in (~45 KB
+# EVERY TARGET LOADS AT 0x11000000. Do not add one that loads into flash.
+#
+# QSPI flash at 0x10000000 holds the stock DISPLAY firmware, which is the
+# bootloader that launches apps from the SD card. An image linked there and
+# programmed over the debug probe replaces it, and this repository ships no
+# image to restore it. Both targets below are therefore staged in PSRAM and
+# routed by load address (AGENTS.md invariant 19).
+#
+# Apps are installed by copying the .uf2 to /apps on the card, or with
+# wilibsp's `fw install-app`, which writes the card over MAIN's serial link.
+# The debug probe remains the way to read RTT and to drive the agentio
+# harness; neither writes to the device.
+
+# The copy_to_ram target does not fit with the agentio harness linked in (~45 KB
 # of SRAM against ~22 KB spare: '.bss will not fit in region RAM', overflowed by
-# 16652 bytes). Skip them explicitly rather than letting the link fail, so
+# 16652 bytes). Skip it explicitly rather than letting the link fail, so
 # -DFW2_AGENTIO=ON reports a deliberate omission instead of an error.
 if(FW2_AGENTIO)
-    message(STATUS "FW2_AGENTIO=ON: skipping orcastra_swd and orcastra_sd "
+    message(STATUS "FW2_AGENTIO=ON: skipping orcastra_sd "
                    "(copy_to_ram + harness exceeds SRAM); building orcastra_psram only")
 endif()
 
 if(NOT FW2_AGENTIO)
-# SWD/debug-probe image: load region in flash at 0x10000000, run from SRAM.
-add_executable(orcastra_swd ${ORCASTRA_SRCS})
-target_link_libraries(orcastra_swd freewili2_bsp pico_multicore)
-orcastra_app_metadata(orcastra_swd)
-pico_set_binary_type(orcastra_swd copy_to_ram)   # firmware runs from SRAM
-pico_add_extra_outputs(orcastra_swd)             # .uf2 / .bin / .map
-
 # SD-card twin for the stock launcher's /apps picker. Same sources, same
 # copy_to_ram execution-from-SRAM behaviour; the ONLY difference is that the
 # load image sits in PSRAM at 0x11000000 instead of flash at 0x10000000, which

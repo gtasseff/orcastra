@@ -30,7 +30,7 @@ WILIBSP_FW = REPO / "external" / "wilibsp" / "tools" / "fw.py"
 # the name that matches the UF2 rather than the target -- made every harness
 # command exit with "need toolchain nm and .../orcastra.elf" instead of running.
 # The fallbacks let it still work against a copy_to_ram build if one is current.
-ELF_CANDIDATES = ["orcastra_psram.elf", "orcastra_sd.elf", "orcastra_swd.elf"]
+ELF_CANDIDATES = ["orcastra_psram.elf", "orcastra_sd.elf"]
 PICO_ROOT = pathlib.Path.home() / ".pico-sdk"
 
 

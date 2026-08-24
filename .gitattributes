@@ -1,5 +1,3 @@
-# SD-card content is consumed by on-device parsers, not by Windows tools.
-# The theme we verified on hardware had LF endings; keep it that way so a
-# fresh clone ships the exact bytes that were tested.
-*.theme text eol=lf
-sdcard/** text eol=lf
+# Keep the Python tooling LF so it behaves identically under Git Bash, WSL and
+# a POSIX checkout.
+*.py text eol=lf
