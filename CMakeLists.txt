@@ -5,6 +5,13 @@ cmake_minimum_required(VERSION 3.13)
 set(PICO_BOARD freewili2 CACHE STRING "Board type")
 list(APPEND PICO_BOARD_HEADER_DIRS "${CMAKE_CURRENT_LIST_DIR}/external/wilibsp/bsp/boards")
 
+# wilibsp vendors Pico-PIO-USB rather than fetching it, and the SDK's
+# tinyusb_pico_pio_usb wiring needs this pointed at the vendored copy BEFORE
+# pico_sdk_import.cmake runs. The BSP compiles its PIO USB host sources
+# unconditionally, so without this the build fails on a missing pio_usb.h.
+set(PICO_PIO_USB_PATH
+    "${CMAKE_CURRENT_LIST_DIR}/external/wilibsp/bsp/third_party/Pico-PIO-USB")
+
 include(pico_sdk_import.cmake)
 project(orcastra C CXX ASM)
 set(CMAKE_C_STANDARD 11)
