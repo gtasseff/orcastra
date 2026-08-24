@@ -13,7 +13,7 @@ is reachable from a stock FREE-WILi 2 and a `git clone --recursive`.
 
 It launches from the device's own `/apps` menu like any other FREE-WILi 2 app —
 it does not replace your display firmware — and it executes **from PSRAM**,
-which is what keeps 112 KB of SRAM free for the audio path.
+which is what keeps SRAM free for the audio path.
 
 [fw2]: https://freewili.com
 [wilibsp]: https://github.com/freewili/wilibsp
@@ -33,7 +33,7 @@ YouTube](https://www.youtube.com/watch?v=Nq65TJWKn_0)
 2. Mount your FREE-WILi 2's SD card and drop it in `/apps`.
 3. Unmount, then pick **orcastra** from the on-device apps menu.
 
-That's the whole install. The app is ~425 KB and stages itself into PSRAM at
+That's the whole install. The app is ~420 KB and stages itself into PSRAM at
 `0x11000000`; your display firmware is untouched, and a power cycle puts you
 back in the launcher.
 
