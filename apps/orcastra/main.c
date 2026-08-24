@@ -66,6 +66,7 @@
 #include "keys.h"
 #include "agentio/agentio.h"
 #include "input/uartkbd.h"
+#include "input/app_recovery.h"
 #include "sensors/bmi323.h"
 #include "sensors/opt4001.h"
 #include "sensors/bmm350.h"
@@ -4131,8 +4132,18 @@ int main(void) {
     // (bench 2026-07-29: codec rail-up mid-boot wedged SDA — codec NAKs
     // then bus timeouts, audio engine then blocks on missing I2S clocks).
     // Requesting first means peripherals initialize onto stable rails.
-    uartkbd_init();
-    DIAG("uartkbd: init (buttons live)\n");
+    // Performs uartkbd_init() itself (input/app_recovery.h). Do not also
+    // call uartkbd_init(): it claims a DMA channel and is not idempotent.
+    // It belongs HERE rather than later because the power-rail block below
+    // needs the keyboard link for picpwr status frames, and st7796_init()
+    // does not run until after that block.
+    //
+    // The rail waits below pump uartkbd_task(), NOT fw2_app_recovery_task():
+    // recovery reboots to the display loader, and doing that before the panel
+    // is up gives the user a blank screen with no indication of why. Recovery
+    // is armed from the main loop onward, once there is a UI to leave.
+    fw2_app_recovery_init();
+    DIAG("uartkbd: init (buttons live, HOME recovery armed)\n");
     sd_bt('P');
     {
         // Status frames arrive ~1/s; wait up to 3 s for the first one so
@@ -4826,7 +4837,9 @@ int main(void) {
         // Colored buttons: poll the keyboard coprocessor; on the EQ page
         // GREY/YELLOW/GREEN/BLUE/RED grab bands 1..5 (colors match the
         // on-screen handles). Other pages just drain the event queue.
-        uartkbd_task();
+        // This also services HOME recovery, which reboots to the display
+        // loader after a 5 s hold; it must run on every main-loop pass.
+        fw2_app_recovery_task();
         // ---- Escape hatch: hold BLUE through the first 8 s after boot ----
         // Drops the display CPU into its USB (BOOTSEL) bootloader so this
         // app can ALWAYS be reflashed by drag-drop, with no debug probe and
@@ -6318,7 +6331,7 @@ int main(void) {
                 bool sent = picpwr_send(&req);
                 uint32_t rails = 0;
                 for (int i = 0; i < 100; i++) {   // ride out the rail walk
-                    uartkbd_task();
+                    fw2_app_recovery_task();
                     sleep_ms(25);
                 }
                 bool on = picpwr_rails(&rails) &&
