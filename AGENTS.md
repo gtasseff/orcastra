@@ -1,9 +1,16 @@
 # AGENTS.md — Orcastra engineering notes
 
-Orientation for AI coding agents (and humans) working on Orcastra. It is
-intentionally dense, and it is the accumulated *this-cost-us-an-afternoon* list
-for this hardware. Almost every line below was learned by getting it wrong
-first. Do **not** rediscover these.
+**Read `external/wilibsp/AGENTS.md` completely, through EOF, before inspecting
+or changing this project.** That file is the authoritative FREE-WILi 2 BSP and
+app contract — build wrappers, the FW2App requirements every app must meet, the
+power-zone rules and the hardware-verification procedure. It is intentionally
+long: if your reader truncates output, continue from the last line in additional
+chunks until you reach EOF. Do not act after reading only its first chunk. The
+contract is not restated here, because duplicated rules drift.
+
+Then read this file. It covers what is specific to Orcastra: the audio path, the
+PSRAM execution scheme, the UI, and the hardware constraints this app runs into.
+It is dense on purpose — treat every invariant below as load-bearing.
 
 If you are here to add an effect, read
 [`docs/ADDING-AN-EFFECT.md`](docs/ADDING-AN-EFFECT.md) for the mechanics and
@@ -52,7 +59,7 @@ orcastra/
                           the timing-critical + audio set forced into SRAM
     psram_link/           the copy_to_ram variant (staged in PSRAM, runs in SRAM)
   tools/
-    fw.py / fw.cmd        build / flash / RTT driver (see below)
+    fw.py / fw.cmd        build + RTT driver (no flash path — see below)
     agentio.py            screenshot + input injection over SWD
     check_psram_xip.py    structural verification of the PSRAM-execution build
     read_boot_stage.py    read the boot breadcrumb from a hung app, no halt
@@ -75,10 +82,15 @@ hardcode a version here.
 
 | Command | What it does |
 |---|---|
-| `fw build [app]` | Configure (first run) + build `apps/<app>` (default `orcastra`) → `build/apps/<app>/<app>.elf` |
-| `fw flash [app]` | Program + verify + reset over the on-board CMSIS-DAP debug probe via OpenOCD (no BOOTSEL dance) |
+| `fw build [target]` | Configure (first run) + build one target (default `orcastra_psram`) → `build/apps/orcastra/<target>.elf`. The app DIRECTORY is `apps/orcastra`; the TARGETS are `orcastra_psram` and `orcastra_sd`. Target name ≠ directory name, so never compose a path from the target name. |
 | `fw rtt [-s N]` | Stream SEGGER RTT diagnostics (OpenOCD RTT server, port 9090); `-s N` captures N seconds then exits |
-| `fw new-app <name>` | Scaffold a new app directory; then add `add_subdirectory(apps/<name>)` to the top-level CMakeLists.txt yourself. (The template it copies is not published — for a new effect you want `docs/ADDING-AN-EFFECT.md`, not a new app.) |
+
+**This driver has no `flash` command, by design.** Both targets load at
+`0x11000000`; the only thing the probe could program is QSPI flash at
+`0x10000000`, which holds the stock DISPLAY firmware — the bootloader that
+launches apps from the card. Install an app by copying its `.uf2` to `/apps`, or
+with wilibsp's `fw install-app`, which writes the card over MAIN's serial link.
+The probe is how you read RTT and drive the agentio harness.
 
 Before flashing: `Get-Process openocd -ErrorAction SilentlyContinue | Stop-Process -Force`
 (a stale OpenOCD instance holds the probe). If flashing fails with "unable to
@@ -188,11 +200,12 @@ deliberate — see invariant 22 before moving it.
     suffered. Day-1 builds flashed fine because their only free-running
     DMA wrote small fixed buffers near 0x20081974, missing the work area;
     the PDM build's big ring landed on it.
-    FIX (in `fw flash`, tools/fw.py DMA_QUIESCE): halt, CHAN_ABORT all 16
-    channels, clear every CHx_CTRL_TRIG, then program — cores stay halted
-    through program's internal reset so nothing re-arms. Verified: flash
-    over a RUNNING app, and RTT-then-immediate-reflash, both first-try. No
-    power cycles, no update ritual. If symptoms ever return, check for
+    FIX: halt, CHAN_ABORT all 16 channels, clear every CHx_CTRL_TRIG, then
+    program — cores stay halted through program's internal reset so nothing
+    re-arms. Verified: flash over a RUNNING app, and RTT-then-immediate-
+    reflash, both first-try. The sequence lives in wilibsp's `tools/fw.py`,
+    and applies to anything that programs this board while an orcastra build
+    is running — including restoring the stock DISPLAY image. If symptoms ever return, check for
     post-reset DMA activity first: `mdw 0x50000000 64` twice, look for
     advancing WRITE_ADDRs.
 
@@ -305,8 +318,15 @@ two-press chord text engine on top, if you need text entry.
   driver there that someone has debugged on real hardware.
 - Keep new pure logic (DSP, parsers) SDK-free so it can be host-tested;
   hardware glue is verified on the device (RTT + ears/eyes).
-- Verify on hardware before claiming success: `fw build` → stop openocd →
-  `fw flash` → `fw rtt -s 8` (expect boot banner + `codec: input path ready`).
+- Verify on hardware before claiming success, on the path users actually run:
+  `fw build` → copy `build/apps/orcastra/orcastra.uf2` to `/apps` on the card
+  (or `fw install-app` from wilibsp) → launch it from the on-device picker →
+  `fw rtt -s 8` (expect boot banner + `codec: input path ready`). With
+  `-DFW2_AGENTIO=ON`, add `python tools/agentio.py screenshot -o shot.png` and
+  actually LOOK at the PNG — a capture that succeeds and shows the wrong thing
+  is the failure worth catching. If the app dies before its first DIAG, read
+  the breadcrumb with `tools/read_boot_stage.py` (no halt, so the three-finger
+  YELLOW+GREEN+BLUE reset still works — invariant 24).
 - Conventional Commits (`feat:`, `fix:`, `docs:`, ...), imperative subject.
 - **This repo is PUBLIC.** Everything committed here is world-readable, so:
   no unit serial numbers, no local absolute paths, no named colleagues, and
@@ -376,13 +396,14 @@ two-press chord text engine on top, if you need text entry.
 
 17. **Any display-side SWD reset desyncs the power-coprocessor link**
     (bench-proven 2026-08-05, cost an afternoon). `program ... verify reset`
-    (which `fw flash` emits, tools/fw.py flash_command) or any `reset` on
+    (whatever emits it — wilibsp's `fw flash`, or a manual OpenOCD invocation
+    restoring the stock image) or any `reset` on
     OpenOCD interface 0 reboots DISPLAY alone; the always-on battery-rail
     power coprocessor keeps its stale link state and does NOT re-sync on its
     own. Unplugging USB does not reset it; cycling the display rail does not
     reset it. Recovery: hold RED ~3 s for a TRUE power-down, then power up.
-    Rule: after any `fw flash`, RED-power-cycle before trusting buttons,
-    zone telemetry, or SD-loader behavior.
+    Rule: after any probe-side reset or reflash, RED-power-cycle before
+    trusting buttons, zone telemetry, or SD-loader behavior.
 
 18. **Power zones: never use per-zone "Set Zone" on the MAIN console** — it
     resolves to an ABSOLUTE awake mask seeded from cached state, so with
@@ -523,7 +544,7 @@ two-press chord text engine on top, if you need text entry.
     genuinely needed, do NOT add a top-level submodule: wilibsp already vendors
     it at `external/wilibsp/libs/onewili`, so point at that and the
     one-dependency story survives.
-    **THE PIN IS DELIBERATELY NOT UPSTREAM TIP.** It is `8cdd5cb` ("merge:
+    **THE PIN IS `8cdd5cb`** ("merge:
     resolve FW2App contract with target enforcement"), which is an ancestor of
     `freewili/wilibsp` master — so `git clone --recursive` reaches it. Verify
     that property with `git merge-base --is-ancestor <pin> origin/master` before
@@ -534,14 +555,36 @@ two-press chord text engine on top, if you need text entry.
     `i2s-integer-clkdiv-v2`, `bound-i2c-transfers`, `capture-dma-ring-clamp`,
     `speaker-output-ceiling`, `power-zone-requests`, `power-up-example-apps` —
     are upstream at or before that commit, verified with
-    `git merge-base --is-ancestor`. Do not bump to tip without testing:
-    `a5baa71` ("feat(usb): add PIO HID host driver") makes `bsp/CMakeLists.txt`
-    compile `pio_usb_host/*.cpp`, which needs `pio_usb.h` from Pico-PIO-USB —
-    **and that library is absent from the Pico VS Code extension's SDK install**
-    (`lib/` has only btstack, cyw43-driver, lwip, mbedtls, tinyusb; there is no
-    `Pico-PIO-USB` and no `tinyusb/hw/mcu/raspberry_pi`). Bumping past it fails
-    with `fatal error: pio_usb.h: No such file or directory`. Either stay at
-    `8cdd5cb` or get USB host made optional upstream.
+    `git merge-base --is-ancestor`.
+
+    **Requirements for building against a newer pin.** Two things must be in
+    place before the pin can advance past `a5baa71` ("feat(usb): add PIO HID
+    host driver"), which makes `bsp/CMakeLists.txt` compile the PIO USB host
+    sources:
+
+    1. Point the SDK at the Pico-PIO-USB copy that wilibsp vendors, BEFORE
+       `include(pico_sdk_import.cmake)` in the top-level CMakeLists.txt:
+
+           set(PICO_PIO_USB_PATH
+               "${CMAKE_CURRENT_LIST_DIR}/external/wilibsp/bsp/third_party/Pico-PIO-USB")
+
+    2. Initialize the Pico SDK's own TinyUSB submodule, which the VS Code
+       extension leaves unpopulated:
+
+           git -C ~/.pico-sdk/sdk/2.3.0 submodule update --init lib/tinyusb
+
+       Without it the build fails at the CMake GENERATE step — not at
+       configure, which makes it easy to misread — with
+       `Cannot find source file: .../lib/tinyusb/src/tusb.c`.
+
+    With both in place the app builds against master and passes
+    `tools/check_psram_xip.py` and wilibsp's `tools/check_app_uf2.py`. Advancing
+    the pin is a prerequisite for adopting `fw2_psram_app()` (see the roadmap in
+    README.md): the commits above `8cdd5cb` are largely PSRAM-app bootstrap
+    fixes to that helper.
+
+    **SDK 2.3.0 is a hard floor.** 2.2.0 has no
+    `pico_add_linker_script_override_path`, so it cannot configure this project.
 
 23. **PSRAM tCPH lives in the TOP-LEVEL CMakeLists, not per-app** (2026-08-23).
     `PICO_DEFAULT_PSRAM_MIN_DESELECT=22` is set with `add_compile_definitions()`
